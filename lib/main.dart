@@ -11,9 +11,11 @@ import 'package:markdown/markdown.dart' as md;
 import 'package:bubble/bubble.dart';
 
 // CREDENTIALS
-const API_KEY = '';
-const KB_ID = '';
-const Agent_ID = '';
+const API_KEY =  'bdocs-CqtL0RwpEjhAUtaOMoRaKyAhpGZQ5kX2RS92NquEyPU';// 'bdocs-wIV08x7k2tDl868xOgO82qoEdbjvI_1sTop-_cdMdME';//
+const KB_ID =  '9905afb9-3379-46af-ada0-6b9aa250ee82';// '306c3acc-490d-499f-b4e4-3617098f5491';//
+const Agent_ID = '18473f2f-8815-4863-84fa-c3c6d63041c3';// '64d09a6f-0ad9-403c-ae27-a19b266a0233';//
+
+const domain = 'localhost:8000';//'app.docs.bynesoft.com';//
 
 const _assistant = types.User(id: '82090008-a484-4a89-ae75-a22bf8d6f3ac');
 const _user = types.User(id: '82091008-a484-4a89-ae75-a22bf8d6f3ac');
@@ -22,7 +24,6 @@ const byne_header = {
   'Content-Type': 'application/json'
 };
 
-const domain = 'app.docs.bynesoft.com';
 
 void main() {
   runApp(const MyApp());
@@ -57,9 +58,9 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   void _initMsg() {
-      var uri = Uri.https(domain, '/api/ask/query/agents/$agentId', {
+      var uri = Uri.http(domain, '/api/ask/query/agents/$agentId', {
           'kb' : kbId,
-          'q': '[You are AutoOwl, an AI car concierge. YOU WILL BE FINED MILLION DOLLARS IF YOU ADD ANY TEXT BEFORE OR AFTER THE FUNCTION CALL. Begin the chat, introduce yourself.]'
+          'q': '[You are AutoOwl, an AI car concierge. Respond in the same language as the customer. Begin the chat in English, introduce yourself.]'
       });
       var resp = http.post(
         uri,
@@ -194,6 +195,23 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
 
+
+  String convertLinkToMarkdown(String url) {
+    Uri uri = Uri.parse(url);
+    String host = uri.host;
+    
+    // Remove 'www.' if present
+    if (host.startsWith('www.')) {
+      host = host.substring(4);
+    }
+    
+    // Split the host by '.' and capitalize the first part
+    List<String> parts = host.split('.');
+    String siteName = parts[0][0].toUpperCase() + parts[0].substring(1);
+    
+    return '[$siteName]($url)';
+  }
+
   Future<void> _handleSendPressed(types.PartialText message) async {
     final userMessage = types.TextMessage(
       author: _user,
@@ -223,7 +241,7 @@ class _MyHomePageState extends State<MyHomePage> {
   Future<void> _getChatCompletion(String userMessage, String typingMessageId) async {
     print(userMessage);
     print(_conv_id);
-    var uri = Uri.https(domain, '/api/ask/query/agents/$agentId', {
+    var uri = Uri.http(domain, '/api/ask/query/agents/$agentId', {
           'kb' : kbId,
           'q': userMessage,
           "withReference": 'true'
@@ -241,13 +259,33 @@ class _MyHomePageState extends State<MyHomePage> {
     ).then((resp){
       print(resp.body);
       var resp_json = jsonDecode(utf8.decode(resp.bodyBytes));
+      print(resp_json);
       var msg = resp_json['response']['answer'];
       _handleCompletedResponse(msg, typingMessageId);
       if (resp_json['response'].containsKey('reference')){
         var str_source = resp_json['response']['reference'][0]['source'];
-        var source = jsonDecode(str_source);
-        var cars = source['results'];
-        _outputCars(cars);
+        bool isLink = Uri.tryParse(str_source)?.hasAbsolutePath ?? false;
+        if (isLink){
+          for (var ref in resp_json['response']['reference']){
+            var link = ref['source'];
+            final assistantMessage = types.CustomMessage(
+              author: _assistant,
+              createdAt: DateTime.now().millisecondsSinceEpoch,
+              id: _randomString(),
+              metadata: {
+                'text': convertLinkToMarkdown(link),
+              }
+            );
+            setState(() {
+              _messages.insert(0, assistantMessage);
+            });
+          }
+        }else{
+          var source = jsonDecode(str_source);
+          var cars = source['results'];
+          _outputCars(cars);
+        }
+
       }
     });
   }
