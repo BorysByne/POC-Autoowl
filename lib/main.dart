@@ -15,7 +15,7 @@ const API_KEY =  'bdocs-CqtL0RwpEjhAUtaOMoRaKyAhpGZQ5kX2RS92NquEyPU';// 'bdocs-w
 const KB_ID =  '9905afb9-3379-46af-ada0-6b9aa250ee82';// '306c3acc-490d-499f-b4e4-3617098f5491';//
 const Agent_ID = '18473f2f-8815-4863-84fa-c3c6d63041c3';// '64d09a6f-0ad9-403c-ae27-a19b266a0233';//
 
-const domain = 'localhost:8000';//'app.docs.bynesoft.com';//
+const domain = 'dev.docs.bynesoft.com'; // 'localhost:8000';// 'app.docs.bynesoft.com'; //
 
 const _assistant = types.User(id: '82090008-a484-4a89-ae75-a22bf8d6f3ac');
 const _user = types.User(id: '82091008-a484-4a89-ae75-a22bf8d6f3ac');
@@ -58,9 +58,9 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   void _initMsg() {
-      var uri = Uri.http(domain, '/api/ask/query/agents/$agentId', {
+      var uri = Uri.https(domain, '/api/ask/query/agents/$agentId', {
           'kb' : kbId,
-          'q': '[You are AutoOwl, an AI car concierge. Respond in the same language as the customer. Begin the chat in English, introduce yourself.]'
+          'q': '[You are AutoOwl, an AI car concierge. Respond in the same language as the customer. Begin the chat in English, introduce yourself and provide a disclaimer informing the customer that you can make mistakes.]'
       });
       var resp = http.post(
         uri,
@@ -120,6 +120,7 @@ class _MyHomePageState extends State<MyHomePage> {
                           Text('Price: ${message.metadata!['price']}'),
                           Text('Fuel Type: ${message.metadata!['fuelType']}'),
                           Text('Transmission: ${message.metadata!['transmission']}'),
+                          Text('ID: ${message.metadata!['id']}'),
                         ],
                       ),
                     );
@@ -196,7 +197,7 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
 
-  String convertLinkToMarkdown(String url) {
+  String convertLinkToMarkdown(String url, String title) {
     Uri uri = Uri.parse(url);
     String host = uri.host;
     
@@ -209,7 +210,7 @@ class _MyHomePageState extends State<MyHomePage> {
     List<String> parts = host.split('.');
     String siteName = parts[0][0].toUpperCase() + parts[0].substring(1);
     
-    return '[$siteName]($url)';
+    return '[$siteName – $title]($url)';
   }
 
   Future<void> _handleSendPressed(types.PartialText message) async {
@@ -241,7 +242,7 @@ class _MyHomePageState extends State<MyHomePage> {
   Future<void> _getChatCompletion(String userMessage, String typingMessageId) async {
     print(userMessage);
     print(_conv_id);
-    var uri = Uri.http(domain, '/api/ask/query/agents/$agentId', {
+    var uri = Uri.https(domain, '/api/ask/query/agents/$agentId', {
           'kb' : kbId,
           'q': userMessage,
           "withReference": 'true'
@@ -268,12 +269,14 @@ class _MyHomePageState extends State<MyHomePage> {
         if (isLink){
           for (var ref in resp_json['response']['reference']){
             var link = ref['source'];
+            var title = ref['title'];
+
             final assistantMessage = types.CustomMessage(
               author: _assistant,
               createdAt: DateTime.now().millisecondsSinceEpoch,
               id: _randomString(),
               metadata: {
-                'text': convertLinkToMarkdown(link),
+                'text': convertLinkToMarkdown(link, title),
               }
             );
             setState(() {
@@ -308,6 +311,7 @@ class _MyHomePageState extends State<MyHomePage> {
           'price': car['sales_conditions']['pricing']['asking']['consumer']['formatted'],
           'fuelType': car['powertrain']['engine']['energy']['type']['category']['display_value'],
           'transmission': car['powertrain']['transmission']['type']['display_value'],
+          'id': car['id'],
         },
       );
 
