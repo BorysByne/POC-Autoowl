@@ -1,28 +1,64 @@
 import 'dart:convert';
 import 'dart:math';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_chat_types/flutter_chat_types.dart' as types;
 import 'package:flutter_chat_ui/flutter_chat_ui.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter_widget_from_html/flutter_widget_from_html.dart';
 import 'package:markdown/markdown.dart' as md;
-
 import 'package:bubble/bubble.dart';
+import 'dart:async';
+
 
 // CREDENTIALS
 const API_KEY =  'bdocs-CqtL0RwpEjhAUtaOMoRaKyAhpGZQ5kX2RS92NquEyPU';// 'bdocs-wIV08x7k2tDl868xOgO82qoEdbjvI_1sTop-_cdMdME';//
 const KB_ID =  '9905afb9-3379-46af-ada0-6b9aa250ee82';// '306c3acc-490d-499f-b4e4-3617098f5491';//
 const Agent_ID = '18473f2f-8815-4863-84fa-c3c6d63041c3';// '64d09a6f-0ad9-403c-ae27-a19b266a0233';//
 
-const domain = 'dev.docs.bynesoft.com'; // 'localhost:8000';// 'app.docs.bynesoft.com'; //
+const domain =  'dev.docs.bynesoft.com'; //'localhost:8000';//  'app.docs.bynesoft.com'; //
 
-const _assistant = types.User(id: '82090008-a484-4a89-ae75-a22bf8d6f3ac');
-const _user = types.User(id: '82091008-a484-4a89-ae75-a22bf8d6f3ac');
+const _assistant = types.User(id: 'ASSIST');
+const _user = types.User(id: 'USR');
 const byne_header = {
   'X-API-Key': API_KEY,
-  'Content-Type': 'application/json'
+  'Content-Type': 'application/json',
+  'Transfer-Encoding': 'chunked'
 };
+
+class JsonObjectSplitter extends StreamTransformerBase<String, String> {
+  @override
+  Stream<String> bind(Stream<String> stream) {
+    String buffer = '';
+
+    return stream.transform(
+      StreamTransformer<String, String>.fromHandlers(
+        handleData: (data, sink) {
+          buffer += data;
+          int startIndex = 0;
+
+          while (true) {
+            int endIndex = buffer.indexOf('}{', startIndex);
+            if (endIndex == -1) break;
+
+            // Add 1 to include the closing brace
+            sink.add(buffer.substring(startIndex, endIndex + 1));
+            startIndex = endIndex + 1; // +1 to start at the opening brace of the next object
+          }
+
+          // Keep the remainder in the buffer
+          buffer = buffer.substring(startIndex);
+        },
+        handleDone: (sink) {
+          // Emit any remaining data in the buffer
+          if (buffer.isNotEmpty) {
+            sink.add(buffer);
+          }
+          sink.close();
+        },
+      ),
+    );
+  }
+}
 
 
 void main() {
@@ -47,9 +83,7 @@ class MyHomePage extends StatefulWidget {
 
 class _MyHomePageState extends State<MyHomePage> {
   final List<types.Message> _messages = [];
-  var _conv_id;
-  final agentId = Agent_ID;
-  final kbId = KB_ID;
+  String? _conv_id;
 
   @override
   void initState() {
@@ -57,34 +91,59 @@ class _MyHomePageState extends State<MyHomePage> {
     _initMsg();
   }
 
-  void _initMsg() {
-      var uri = Uri.https(domain, '/api/ask/query/agents/$agentId', {
-          'kb' : kbId,
-          'q': '[You are AutoOwl, an AI car concierge. Respond in the same language as the customer. Begin the chat in English, introduce yourself and provide a disclaimer informing the customer that you can make mistakes.]'
-      });
-      var resp = http.post(
-        uri,
-        headers: byne_header,
-        body: '{}',
-    ).then((resp) {
-      print(resp.body);
-      var resp_json = jsonDecode(utf8.decode(resp.bodyBytes));
-        var msg = resp_json['response']['answer'];
-        _conv_id = resp_json['conversationId'];
-            final assistantMessage = types.CustomMessage(
-              author: _assistant,
-              createdAt: DateTime.now().millisecondsSinceEpoch,
-              id: _randomString(),
-              metadata: {
-                'text': msg
-              }
-            );
-            setState(() {
-              _messages.add(assistantMessage);
-            });
-      });
-  }
 
+void _initMsg() async {
+  var uri = Uri.https(domain, '/api/ask/query/agents/$Agent_ID', {
+    'kb': KB_ID,
+    'stream': "True",
+    'q': '[You are AutoOwl, an AI car concierge. Respond in the same language as the customer. Begin the chat in English, introduce yourself and provide a disclaimer informing the customer that you can make mistakes.]'
+  });
+
+  var request = http.Request('POST', uri);
+  request.headers.addAll(byne_header);
+  request.body = '{}';
+
+  var client = http.Client();
+  final streamedResponse = await client.send(request);
+
+  String completeMessage = '';
+
+  await for (var jsonString in streamedResponse.stream
+        .transform(utf8.decoder)
+        .transform(JsonObjectSplitter())) {
+            await Future.delayed(Duration(milliseconds: 40));
+            final data = jsonDecode(jsonString);
+            if (data['response'] != null && data['response']['answer'] != null) {
+              completeMessage += data['response']['answer'];
+              _updateMessage(completeMessage);
+            }
+            if (data['conversation_id'] != null) {
+              _conv_id = data['conversation_id'];
+            }
+          }
+}
+
+void _updateMessage(String message) {
+    if (_messages.isNotEmpty){
+      print(_messages.first.author.id);
+    }
+
+  final assistantMessage = types.CustomMessage(
+    author: _assistant,
+    createdAt: DateTime.now().millisecondsSinceEpoch,
+    id: _randomString(),
+    metadata: {
+      'text': message
+    }
+  );
+  setState(() {
+    if (_messages.isNotEmpty && _messages.first.author.id == _assistant.id) {
+      _messages.first.metadata?['text'] = message;
+    } else {
+      _messages.insert(0, assistantMessage);
+    }
+  });
+}
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -97,39 +156,7 @@ class _MyHomePageState extends State<MyHomePage> {
                 onSendPressed: _handleSendPressed,
                 user: _user,
                 bubbleBuilder: _bubbleBuilder,
-                customMessageBuilder: (message, {required messageWidth}) {
-                  if (message.metadata?['type'] == 'typing') {
-                    return HtmlWidget('');
-                  } else if (message.metadata?['image'] != null) {
-                    return Container(
-                      padding: const EdgeInsets.all(8),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Image.network(message.metadata!['image']),
-                          const SizedBox(height: 8),
-                          Text(
-                            message.metadata!['title'],
-                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                          ),
-                          const SizedBox(height: 4),
-                          Text('Make: ${message.metadata!['make']}'),
-                          Text('Model: ${message.metadata!['model']}'),
-                          Text('Year: ${message.metadata!['year']}'),
-                          Text('Mileage: ${message.metadata!['mileage']}'),
-                          Text('Price: ${message.metadata!['price']}'),
-                          Text('Fuel Type: ${message.metadata!['fuelType']}'),
-                          Text('Transmission: ${message.metadata!['transmission']}'),
-                          Text('ID: ${message.metadata!['id']}'),
-                        ],
-                      ),
-                    );
-                  } else {
-                    return HtmlWidget('<p style="font-size:1.5em;">' +
-                        md.markdownToHtml(message.metadata?['text']) +
-                        '</p>');
-                  }
-                },
+                customMessageBuilder: _customMessageBuilder,
               ),
             ),
           ],
@@ -196,20 +223,53 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
 
+  Widget _customMessageBuilder(types.CustomMessage message, {required int messageWidth}) {
+    if (message.metadata?['type'] == 'typing') {
+      return HtmlWidget('');
+    } else if (message.metadata?['image'] != null) {
+      return Container(
+        padding: const EdgeInsets.all(8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Image.network(message.metadata!['image']),
+            const SizedBox(height: 8),
+            Text(
+              message.metadata!['title'],
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 4),
+            Text('Make: ${message.metadata!['make']}'),
+            Text('Model: ${message.metadata!['model']}'),
+            Text('Year: ${message.metadata!['year']}'),
+            Text('Mileage: ${message.metadata!['mileage']}'),
+            Text('Price: ${message.metadata!['price']}'),
+            Text('Fuel Type: ${message.metadata!['fuelType']}'),
+            Text('Transmission: ${message.metadata!['transmission']}'),
+            Text('ID: ${message.metadata!['id']}'),
+          ],
+        ),
+      );
+    } else {
+      return HtmlWidget('<p style="font-size:1.5em;">' +
+          md.markdownToHtml(message.metadata?['text']) +
+          '</p>');
+    }
+  }
 
   String convertLinkToMarkdown(String url, String title) {
     Uri uri = Uri.parse(url);
     String host = uri.host;
-    
+
     // Remove 'www.' if present
     if (host.startsWith('www.')) {
       host = host.substring(4);
     }
-    
+
     // Split the host by '.' and capitalize the first part
     List<String> parts = host.split('.');
     String siteName = parts[0][0].toUpperCase() + parts[0].substring(1);
-    
+
     return '[$siteName – $title]($url)';
   }
 
@@ -225,45 +285,45 @@ class _MyHomePageState extends State<MyHomePage> {
       _messages.insert(0, userMessage);
     });
 
-    final typingMessage = types.CustomMessage(
-      author: _assistant,
-      createdAt: DateTime.now().millisecondsSinceEpoch,
-      id: _randomString(),
-      metadata: const {'type': 'typing'},
-    );
 
-    setState(() {
-      _messages.insert(0, typingMessage);
-    });
-
-    await _getChatCompletion(message.text, typingMessage.id);
+    await _getChatCompletion(message.text);
   }
 
-  Future<void> _getChatCompletion(String userMessage, String typingMessageId) async {
+  Future<void> _getChatCompletion(String userMessage) async {
     print(userMessage);
     print(_conv_id);
-    var uri = Uri.https(domain, '/api/ask/query/agents/$agentId', {
-          'kb' : kbId,
+    var uri = Uri.https(domain, '/api/ask/query/agents/$Agent_ID', {
+          'kb' : KB_ID,
           'q': userMessage,
-          "withReference": 'true'
+          "withReference": 'true',
+          'stream': "True"
       });
-    print(uri);
-    var resp = http.post(
-        uri,
-        headers: byne_header,
-        body: jsonEncode({
+
+    var request = http.Request('POST', uri);
+  request.headers.addAll(byne_header);
+  request.body = jsonEncode({
           "conversation": {
                 "id": _conv_id,
-                "priorMessagesCount": 10
+                "priorMessagesCount": 15
           }
-        }),
-    ).then((resp){
-      print(resp.body);
-      var resp_json = jsonDecode(utf8.decode(resp.bodyBytes));
-      print(resp_json);
-      var msg = resp_json['response']['answer'];
-      _handleCompletedResponse(msg, typingMessageId);
-      if (resp_json['response'].containsKey('reference')){
+  });
+
+  var client = http.Client();
+  final streamedResponse = await client.send(request);
+
+  String completeMessage = '';
+
+  await for (var jsonString in streamedResponse.stream
+        .transform(utf8.decoder)
+        .transform(JsonObjectSplitter())) {
+            await Future.delayed(Duration(milliseconds: 40));
+            final resp_json = jsonDecode(jsonString);
+            print(resp_json);
+            if (resp_json['response'] != null && resp_json['response']['answer'] != null) {
+              completeMessage += resp_json['response']['answer'];
+              _updateMessage(completeMessage);
+            }
+                  if (resp_json['response']['reference'].length > 0){
         var str_source = resp_json['response']['reference'][0]['source'];
         bool isLink = Uri.tryParse(str_source)?.hasAbsolutePath ?? false;
         if (isLink){
@@ -288,9 +348,9 @@ class _MyHomePageState extends State<MyHomePage> {
           var cars = source['results'];
           _outputCars(cars);
         }
-
       }
-    });
+          };
+
   }
 
   List<types.Message> _outputCars(List<dynamic> carData) {
@@ -324,25 +384,6 @@ class _MyHomePageState extends State<MyHomePage> {
 
     return carMessages;
   }
-
-  void _handleCompletedResponse(String responseData, String typingMessageId) {
-    setState(() {
-      _messages.removeWhere((msg) => msg.id == typingMessageId);
-    });
-
-    final assistantMessage = types.CustomMessage(
-      author: _assistant,
-      createdAt: DateTime.now().millisecondsSinceEpoch,
-      id: _randomString(),
-      metadata: {
-        'text': responseData,
-      }
-    );
-    setState(() {
-      _messages.insert(0, assistantMessage);
-    });
-  }
-
 
   String _randomString() {
     final random = Random.secure();
